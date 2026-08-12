@@ -11,7 +11,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
   </script>
   <style>
-    /* ===== Same as before, plus a new requests panel ===== */
+    /* ===== CSS ===== */
     :root {
       --admin-dark: #0c1414;
       --admin-sidebar: #0f1a1a;
@@ -708,8 +708,15 @@
               supabase.from('users').select('*'),
               supabase.from('payments').select('*'),
               supabase.from('queries').select('*'),
-              supabase.from('subscription_requests').select('*, companies(name, email, phone)').order('created_at', {
-                ascending: false })
+              supabase.from('subscription_requests').select(`
+                *,
+                companies (
+                  id,
+                  name,
+                  email,
+                  phone
+                )
+              `).order('created_at', { ascending: false })
             ]);
 
           allCompanies = companiesRes.data || [];
@@ -908,7 +915,7 @@
       }
 
       // ================================================================
-      // RENDER: SUBSCRIPTIONS (with renew)
+      // RENDER: SUBSCRIPTIONS
       // ================================================================
       function renderSubscriptions() {
         const tbody = $('#subscriptionsTableBody');
@@ -960,7 +967,8 @@
         }
 
         grid.innerHTML = pending.map(r => {
-          const company = allCompanies.find(c => c.id === r.company_id);
+          // Get company from the joined data or fallback to allCompanies
+          const company = r.companies || allCompanies.find(c => c.id === r.company_id);
           const phone = company ? company.phone : '';
           const whatsappLink = phone ? `https://wa.me/${phone.replace(/[^0-9]/g,'')}` : '#';
           return `
@@ -1208,13 +1216,15 @@
         if (!request) return;
         try {
           // Update request status
-          await supabase
+          const { error: reqError } = await supabase
             .from('subscription_requests')
             .update({ status: 'approved', approved_at: new Date().toISOString() })
             .eq('id', requestId);
+          if (reqError) throw reqError;
 
-          // Update company subscription
-          const company = allCompanies.find(c => c.id === request.company_id);
+          // Get company from the request data
+          const company = request.companies || allCompanies.find(c => c.id === request.company_id);
+
           if (company) {
             const now = new Date();
             let endDate = new Date(now);
@@ -1222,7 +1232,7 @@
             else if (request.plan_type === 'semi_annual') endDate.setMonth(now.getMonth() + 6);
             else if (request.plan_type === 'yearly') endDate.setMonth(now.getMonth() + 12);
 
-            await supabase
+            const { error: compError } = await supabase
               .from('companies')
               .update({
                 subscription_start: now.toISOString().slice(0, 10),
@@ -1230,6 +1240,7 @@
                 status: 'active'
               })
               .eq('id', company.id);
+            if (compError) throw compError;
 
             // Add notification to client
             await supabase
@@ -1253,13 +1264,14 @@
         const request = allRequests.find(r => r.id === requestId);
         if (!request) return;
         try {
-          await supabase
+          const { error: reqError } = await supabase
             .from('subscription_requests')
             .update({ status: 'rejected' })
             .eq('id', requestId);
+          if (reqError) throw reqError;
 
           // Notify client
-          const company = allCompanies.find(c => c.id === request.company_id);
+          const company = request.companies || allCompanies.find(c => c.id === request.company_id);
           if (company) {
             await supabase
               .from('user_notifications')
